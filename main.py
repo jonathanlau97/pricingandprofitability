@@ -451,6 +451,22 @@ if st.session_state.df is not None:
         This helps you understand how fast, mid, and slow movers respond differently to price changes.
         """)
         
+        # Create unfiltered product summary for elasticity testing
+        product_summary_all = df_analyzed.groupby(['product', 'velocity_class']).agg({
+            'quantity': 'sum',
+            'net_revenue': 'sum',
+            'total_cost': 'sum',
+            'profit': 'sum',
+            'order_id': 'count',
+            'slash_discount_pct': 'mean',
+            'unit_price': 'mean',
+            'cost_per_unit': 'mean'
+        }).reset_index()
+        
+        product_summary_all.columns = ['Product', 'Velocity', 'Units Sold', 'Revenue', 'Total Cost', 
+                                   'Profit', 'Orders', 'Avg Slash Discount %', 'Avg Price', 'Avg Cost']
+        product_summary_all['Profit Margin %'] = (product_summary_all['Profit'] / product_summary_all['Revenue'] * 100).round(2)
+        
         # Group products by velocity
         velocity_groups = velocity_df.groupby('velocity_class')['product'].apply(list).to_dict()
         
@@ -481,7 +497,7 @@ if st.session_state.df is not None:
                 
                 # Test each product in this velocity class
                 for product in products_in_class:
-                    product_data = product_summary[product_summary['Product'] == product].iloc[0]
+                    product_data = product_summary_all[product_summary_all['Product'] == product].iloc[0]
                     
                     with st.expander(f"**{product}**"):
                         col1, col2, col3 = st.columns(3)
