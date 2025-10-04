@@ -55,16 +55,13 @@ def generate_sample_data():
         'category': [categories[products.index(p)] for p in np.random.choice(products, n_records)],
         'quantity': np.random.randint(1, 5, n_records),
         'unit_price': np.random.uniform(10, 1000, n_records).round(2),
-        'slash_price': np.random.uniform(12, 1200, n_records).round(2),  # Original/MSRP price
         'cost_per_unit': np.random.uniform(5, 700, n_records).round(2),
-        'discount_pct': np.random.choice([0, 5, 10, 15, 20], n_records, p=[0.4, 0.2, 0.2, 0.15, 0.05]),
+        'discount_amount': np.random.choice([0, 5, 10, 15, 20, 25, 30, 50], n_records, p=[0.4, 0.15, 0.15, 0.1, 0.1, 0.05, 0.03, 0.02]),
         'shipping_cost': np.random.uniform(0, 20, n_records).round(2),
         'date': pd.date_range(start='2024-01-01', periods=n_records, freq='D')[:n_records]
     }
     
     df = pd.DataFrame(data)
-    # Ensure slash price is higher than unit price
-    df['slash_price'] = df.apply(lambda x: max(x['slash_price'], x['unit_price'] * 1.1), axis=1)
     df['cost_per_unit'] = df.apply(lambda x: min(x['cost_per_unit'], x['unit_price'] * 0.8), axis=1)
     return df
 
@@ -74,15 +71,14 @@ def calculate_profitability(df):
     
     # Calculate revenue and costs
     df['gross_revenue'] = df['quantity'] * df['unit_price']
-    df['discount_amount'] = df['gross_revenue'] * (df['discount_pct'] / 100)
+    # discount_amount is already the absolute discount value ($ amount)
     df['net_revenue'] = df['gross_revenue'] - df['discount_amount']
     df['total_cost'] = (df['quantity'] * df['cost_per_unit']) + df['shipping_cost']
     df['profit'] = df['net_revenue'] - df['total_cost']
     df['profit_margin_pct'] = (df['profit'] / df['net_revenue'] * 100).round(2)
     
-    # Calculate slash price discount
-    df['slash_discount_pct'] = ((df['slash_price'] - df['unit_price']) / df['slash_price'] * 100).round(2)
-    df['perceived_savings'] = df['slash_price'] - df['unit_price']
+    # Calculate effective discount percentage for analysis
+    df['discount_pct'] = (df['discount_amount'] / df['gross_revenue'] * 100).round(2)
     
     return df
 
@@ -233,12 +229,14 @@ with st.sidebar:
             - `product` - Product name
             - `category` - Product category
             - `quantity` - Units sold
-            - `unit_price` - Actual selling price
-            - `slash_price` - Original/MSRP price (for discount display)
+            - `unit_price` - Actual selling price per unit
             - `cost_per_unit` - Cost per unit
-            - `discount_pct` - Discount percentage
+            - `discount_amount` - Absolute discount value in $ (not %)
             - `shipping_cost` - Shipping cost per order
             - `date` - Transaction date (optional)
+            
+            **Note**: `discount_amount` should be the actual dollar amount discounted, 
+            whether from percentage codes or fixed amount codes.
             """)
         
         if uploaded_file:
@@ -357,20 +355,21 @@ if st.session_state.df is not None:
             default=['Fast Mover', 'Mid Mover', 'Slow Mover']
         )
         
-        # Aggregated product metrics
+                # Aggregated product metrics
         product_summary = df_analyzed[df_analyzed['velocity_class'].isin(velocity_filter)].groupby(['product', 'velocity_class']).agg({
             'quantity': 'sum',
             'net_revenue': 'sum',
             'total_cost': 'sum',
             'profit': 'sum',
             'order_id': 'count',
-            'slash_discount_pct': 'mean',
+            'discount_amount': 'sum',
+            'discount_pct': 'mean',
             'unit_price': 'mean',
             'cost_per_unit': 'mean'
         }).reset_index()
         
         product_summary.columns = ['Product', 'Velocity', 'Units Sold', 'Revenue', 'Total Cost', 
-                                   'Profit', 'Orders', 'Avg Slash Discount %', 'Avg Price', 'Avg Cost']
+                                   'Profit', 'Orders', 'Total Discounts Given', 'Avg Discount %', 'Avg Price', 'Avg Cost']
         product_summary['Profit Margin %'] = (product_summary['Profit'] / product_summary['Revenue'] * 100).round(2)
         product_summary['Avg Order Value'] = (product_summary['Revenue'] / product_summary['Orders']).round(2)
         
@@ -397,7 +396,8 @@ if st.session_state.df is not None:
             'Total Cost': '${:,.2f}',
             'Profit': '${:,.2f}',
             'Orders': '{:,.0f}',
-            'Avg Slash Discount %': '{:.1f}%',
+            'Total Discounts Given': '${:,.2f}',
+            'Avg Discount %': '{:.1f}%',
             'Avg Price': '${:,.2f}',
             'Avg Cost': '${:,.2f}',
             'Profit Margin %': '{:.2f}%',
@@ -405,23 +405,25 @@ if st.session_state.df is not None:
         }).applymap(color_profit_margin, subset=['Profit Margin %']),
         use_container_width=True, height=400)
         
-        # Slash pricing analysis by velocity
+        # Discount analysis by velocity
         st.markdown("---")
-        st.subheader("Slash Pricing Effectiveness by Velocity")
+        st.subheader("Discount Impact Analysis by Velocity")
         
-        slash_analysis = df_analyzed.groupby('velocity_class').agg({
-            'slash_discount_pct': 'mean',
-            'perceived_savings': 'mean',
-            'quantity': 'sum',
-            'profit_margin_pct': 'mean'
+        discount_analysis = df_analyzed.groupby('velocity_class').agg({
+            'discount_amount': 'sum',
+            'discount_pct': 'mean',
+            'profit_margin_pct': 'mean',
+            'net_revenue': 'sum'
         }).reset_index()
+        
+        discount_analysis['discount_as_pct_of_revenue'] = (discount_analysis['discount_amount'] / discount_analysis['net_revenue'] * 100).round(2)
         
         col1, col2 = st.columns(2)
         
         with col1:
-            fig = px.bar(slash_analysis, x='velocity_class', y='slash_discount_pct',
-                        title='Avg Slash Discount % by Velocity Class',
-                        labels={'slash_discount_pct': 'Avg Discount %', 'velocity_class': 'Velocity Class'},
+            fig = px.bar(discount_analysis, x='velocity_class', y='discount_amount',
+                        title='Total Discounts Given by Velocity Class',
+                        labels={'discount_amount': 'Total Discounts ($)', 'velocity_class': 'Velocity Class'},
                         color='velocity_class',
                         color_discrete_map={
                             'Fast Mover': '#2ecc71',
@@ -431,10 +433,10 @@ if st.session_state.df is not None:
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            fig = px.scatter(slash_analysis, x='slash_discount_pct', y='profit_margin_pct',
-                           size='quantity', color='velocity_class',
-                           title='Discount vs Margin by Velocity',
-                           labels={'slash_discount_pct': 'Avg Discount %', 
+            fig = px.scatter(discount_analysis, x='discount_pct', y='profit_margin_pct',
+                           size='discount_amount', color='velocity_class',
+                           title='Avg Discount % vs Profit Margin by Velocity',
+                           labels={'discount_pct': 'Avg Discount %', 
                                   'profit_margin_pct': 'Avg Profit Margin %'},
                            color_discrete_map={
                                'Fast Mover': '#2ecc71',
@@ -442,6 +444,15 @@ if st.session_state.df is not None:
                                'Slow Mover': '#e74c3c'
                            })
             st.plotly_chart(fig, use_container_width=True)
+        
+        # Show discount effectiveness
+        st.info(f"""
+        **💡 Discount Insights:**
+        - Total discounts given: ${discount_analysis['discount_amount'].sum():,.2f}
+        - Average discount rate: {discount_analysis['discount_pct'].mean():.1f}%
+        - Impact on margins: Discounts reduce overall profitability but may drive volume
+        """)
+        
     
     with tab3:
         st.subheader("🧪 Price Elasticity Testing by Velocity Class")
@@ -458,13 +469,14 @@ if st.session_state.df is not None:
             'total_cost': 'sum',
             'profit': 'sum',
             'order_id': 'count',
-            'slash_discount_pct': 'mean',
+            'discount_amount': 'sum',
+            'discount_pct': 'mean',
             'unit_price': 'mean',
             'cost_per_unit': 'mean'
         }).reset_index()
         
         product_summary_all.columns = ['Product', 'Velocity', 'Units Sold', 'Revenue', 'Total Cost', 
-                                   'Profit', 'Orders', 'Avg Slash Discount %', 'Avg Price', 'Avg Cost']
+                                   'Profit', 'Orders', 'Total Discounts Given', 'Avg Discount %', 'Avg Price', 'Avg Cost']
         product_summary_all['Profit Margin %'] = (product_summary_all['Profit'] / product_summary_all['Revenue'] * 100).round(2)
         
         # Group products by velocity
@@ -1074,7 +1086,7 @@ else:
         st.markdown("""
         ### 📊 Features
         - **Velocity Classification**: Automatically categorize products as Fast/Mid/Slow movers
-        - **Slash Price Analysis**: Understand discount perception impacts
+        - **Discount Analysis**: Track both percentage and absolute dollar discounts
         - **Elasticity Testing**: Test ALL products grouped by velocity class
         - **Smart Recommendations**: Get elasticity-based pricing guidance per velocity tier
         - **Pricing Simulation**: Model price changes by velocity class or individual products
@@ -1083,11 +1095,14 @@ else:
     with col2:
         st.markdown("""
         ### 🚀 Getting Started
-        1. Upload your sales CSV with slash_price column
+        1. Upload your sales CSV with discount_amount column (in $)
         2. Products automatically categorized by velocity (Fast/Mid/Slow)
         3. Run elasticity tests on all products by velocity class
         4. Get smart recommendations based on |ε| > 1.5 rule
         5. Simulate and export your pricing strategy
+        
+        **Note**: Use `discount_amount` for actual dollar discounts given,
+        not percentage. The app will calculate effective discount % automatically.
         """)
 
 # Footer
